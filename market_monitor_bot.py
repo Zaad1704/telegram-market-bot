@@ -4,20 +4,62 @@ import pytz
 import time
 import json
 import logging
+import os
 from typing import Dict, List, Optional
 from dataclasses import dataclass
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
-import yfinance as yf
-import newsapi
-from geopy.geocoders import Nominatim
-import tzlocal
+
+# Try to import telegram, handle if not available
+try:
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+    print("Warning: python-telegram-bot not available. Bot will run in test mode.")
+
+# Try to import yfinance
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    print("Warning: yfinance not available. Stock data will be limited.")
+
+# Try to import newsapi
+try:
+    import newsapi
+    NEWSAPI_AVAILABLE = True
+except ImportError:
+    NEWSAPI_AVAILABLE = False
+    print("Warning: newsapi not available. News features will be limited.")
+
+# Try to import geopy
+try:
+    from geopy.geocoders import Nominatim
+    GEOPY_AVAILABLE = True
+except ImportError:
+    GEOPY_AVAILABLE = False
+    print("Warning: geopy not available. Location features will be limited.")
+
+# Try to import tzlocal
+try:
+    import tzlocal
+    TZLOCAL_AVAILABLE = True
+except ImportError:
+    TZLOCAL_AVAILABLE = False
+    print("Warning: tzlocal not available. Timezone detection will be limited.")
+
 import threading
-import schedule
+try:
+    import schedule
+    SCHEDULE_AVAILABLE = True
+except ImportError:
+    SCHEDULE_AVAILABLE = False
+    print("Warning: schedule not available. Automated tasks will be limited.")
 
 # --- CONFIGURATION ---
-TOKEN = "8512725996:AAEPtUBWNGxkVk6rZLe2q8emZUsHsYYii-A"
-NEWS_API_KEY = "YOUR_NEWS_API_KEY"  # Get from https://newsapi.org/
+TOKEN = os.environ.get('TELEGRAM_TOKEN', "8512725996:AAEPtUBWNGxkVk6rZLe2q8emZUsHsYYii-A")
+NEWS_API_KEY = os.environ.get('NEWS_API_KEY', "YOUR_NEWS_API_KEY")  # Get from https://newsapi.org/
 
 # MARKETS CONFIGURATION
 MARKETS = {
@@ -72,10 +114,23 @@ logger = logging.getLogger(__name__)
 
 class MarketMonitorBot:
     def __init__(self):
+        if not TELEGRAM_AVAILABLE:
+            print("Error: python-telegram-bot is required for this bot to work.")
+            return
+            
         self.updater = Updater(TOKEN)
         self.dispatcher = self.updater.dispatcher
-        self.news_client = newsapi.NewsApiClient(api_key=NEWS_API_KEY) if NEWS_API_KEY != "YOUR_NEWS_API_KEY" else None
-        self.geolocator = Nominatim(user_agent="market_monitor_bot")
+        
+        if NEWSAPI_AVAILABLE and NEWS_API_KEY != "YOUR_NEWS_API_KEY":
+            self.news_client = newsapi.NewsApiClient(api_key=NEWS_API_KEY)
+        else:
+            self.news_client = None
+            
+        if GEOPY_AVAILABLE:
+            self.geolocator = Nominatim(user_agent="market_monitor_bot")
+        else:
+            self.geolocator = None
+            
         self.setup_handlers()
         
     def setup_handlers(self):
@@ -164,14 +219,20 @@ For more help, contact @Sajib
             return user_pref.timezone
             
         # Try to auto-detect timezone
-        try:
-            local_tz = tzlocal.get_localzone()
-            return str(local_tz)
-        except:
-            return "UTC"  # Fallback
+        if TZLOCAL_AVAILABLE:
+            try:
+                local_tz = tzlocal.get_localzone()
+                return str(local_tz)
+            except:
+                pass  # Fallback to UTC
+        
+        return "UTC"  # Fallback
             
     def detect_timezone_from_location(self, latitude: float, longitude: float) -> Optional[str]:
         """Detect timezone from coordinates"""
+        if not GEOPY_AVAILABLE:
+            return None
+            
         try:
             from timezonefinder import TimezoneFinder
             tf = TimezoneFinder()
@@ -283,6 +344,18 @@ For more help, contact @Sajib
     def get_stock_data(self, symbols: List[str]) -> Dict[str, dict]:
         """Get current stock data for given symbols"""
         stock_data = {}
+        
+        if not YFINANCE_AVAILABLE:
+            # Return mock data if yfinance is not available
+            for symbol in symbols:
+                stock_data[symbol] = {
+                    "symbol": symbol,
+                    "name": symbol,
+                    "price": "N/A",
+                    "change": "N/A",
+                    "change_percent": "N/A"
+                }
+            return stock_data
         
         for symbol in symbols:
             try:
@@ -521,18 +594,23 @@ For more help, contact @Sajib
                 
     def run(self):
         """Start the bot"""
+        if not TELEGRAM_AVAILABLE:
+            print("Cannot start bot: python-telegram-bot is not available.")
+            return
+            
         logger.info("Starting Market Monitor Bot...")
         
         # Schedule periodic alerts
-        schedule.every(30).minutes.do(self.send_market_alerts)
-        
-        def run_scheduler():
-            while True:
-                schedule.run_pending()
-                time.sleep(60)
+        if SCHEDULE_AVAILABLE:
+            schedule.every(30).minutes.do(self.send_market_alerts)
+            
+            def run_scheduler():
+                while True:
+                    schedule.run_pending()
+                    time.sleep(60)
                 
-        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-        scheduler_thread.start()
+            scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+            scheduler_thread.start()
         
         self.updater.start_polling()
         self.updater.idle()
